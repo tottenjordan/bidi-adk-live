@@ -35,3 +35,27 @@ class TestWebSocketEndpoint:
         with client.websocket_connect("/ws/test-user/test-session") as ws:
             # Connection should be accepted without error
             assert ws is not None
+
+
+class TestWebSocketMessageFormats:
+    """Verify the server handles different message types."""
+
+    def test_text_message_format(self, app):
+        """Server accepts JSON text messages."""
+        import json
+        client = TestClient(app)
+        with client.websocket_connect("/ws/test-user/text-session") as ws:
+            ws.send_text(json.dumps({"type": "text", "text": "Hello"}))
+
+    def test_image_message_format(self, app):
+        """Server accepts JSON image messages with base64 data."""
+        import json
+        import base64
+        client = TestClient(app)
+        fake_image = base64.b64encode(b"\xff\xd8\xff\xe0" + b"\x00" * 10).decode()
+        with client.websocket_connect("/ws/test-user/image-session") as ws:
+            ws.send_text(json.dumps({
+                "type": "image",
+                "mimeType": "image/jpeg",
+                "data": fake_image,
+            }))
