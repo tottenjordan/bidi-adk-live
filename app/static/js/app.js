@@ -174,6 +174,9 @@ function handleServerEvent(data) {
   }
   if (event.output_transcription?.text) {
     updateTranscription("agent", event.output_transcription.text, event.output_transcription.finished);
+    // Stream output transcriptions into the chat as agent messages in real-time.
+    // For native audio models, this is the only text representation of the response.
+    updateAgentMessage(event.output_transcription.text, !event.output_transcription.finished);
   }
 
   if (event.content?.parts) {
@@ -206,12 +209,6 @@ function updateTranscription(role, text, finished) {
     entry.innerHTML = `<span class="transcription-role">${role === "user" ? "You" : "Agent"}:</span> ${escapeHtml(text)}`;
     transcriptionContent.appendChild(entry);
     transcriptionContent.scrollTop = transcriptionContent.scrollHeight;
-
-    // Show finished output transcriptions as agent messages in the chat
-    // so the user sees the text even when audio can't play yet.
-    if (role === "agent" && text.trim()) {
-      addMessage("agent", text);
-    }
 
     if (role === "user") currentInputTranscription = "";
     else currentOutputTranscription = "";
