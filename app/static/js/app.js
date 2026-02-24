@@ -39,6 +39,7 @@ const debugPanels = document.getElementById("debugPanels");
 // --- Transcription State ---
 let currentInputTranscription = "";
 let currentOutputTranscription = "";
+let accumulatedOutputTranscription = "";
 
 // --- WebSocket Connection ---
 function connect() {
@@ -173,10 +174,21 @@ function handleServerEvent(data) {
     updateTranscription("user", event.input_transcription.text, event.input_transcription.finished);
   }
   if (event.output_transcription?.text) {
-    updateTranscription("agent", event.output_transcription.text, event.output_transcription.finished);
-    // Stream output transcriptions into the chat as agent messages in real-time.
+    const finished = event.output_transcription.finished;
+    if (finished) {
+      // Finished transcription contains the full cumulative text — use it directly.
+      accumulatedOutputTranscription = event.output_transcription.text;
+    } else {
+      // Partial transcriptions are incremental chunks — accumulate them.
+      accumulatedOutputTranscription += event.output_transcription.text;
+    }
+    updateTranscription("agent", event.output_transcription.text, finished);
+    // Stream accumulated transcription into the chat as an agent message.
     // For native audio models, this is the only text representation of the response.
-    updateAgentMessage(event.output_transcription.text, !event.output_transcription.finished);
+    updateAgentMessage(accumulatedOutputTranscription, !finished);
+    if (finished) {
+      accumulatedOutputTranscription = "";
+    }
   }
 
   if (event.content?.parts) {
