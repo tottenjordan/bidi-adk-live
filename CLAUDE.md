@@ -14,22 +14,28 @@ Browser (camera + mic) → WebSocket → FastAPI → ADK Runner.run_live() → V
 - **Upstream**: Browser sends audio (binary PCM @ 16kHz), text (JSON), and images (JPEG base64 JSON @ 1 FPS) via WebSocket. FastAPI queues them into `LiveRequestQueue`.
 - **Downstream**: `Runner.run_live()` yields events (audio, text, transcriptions, tool calls). FastAPI forwards them as JSON over WebSocket.
 - **Tool execution**: ADK automatically handles `log_appliance` tool calls. The tool writes to `session.state["appliance_inventory"]`.
+- **Response modality**: Auto-detected from model name — `native-audio` models use `AUDIO` response modality, others use `TEXT`.
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `app/main.py` | FastAPI server with WebSocket endpoint `/ws/{user_id}/{session_id}` |
-| `app/home_agent/agent.py` | ADK Agent definition (model, instruction, tools) |
-| `app/home_agent/tools.py` | `log_appliance` tool — writes to session state |
-| `app/home_agent/__init__.py` | Package init — exports `agent` |
-| `app/static/index.html` | Web UI — chat, camera, transcription, console |
-| `app/static/js/app.js` | Core JS — WebSocket, audio, camera, event handling |
-| `app/static/js/audio-player.js` | Audio playback worklet setup (24kHz) |
-| `app/static/js/audio-recorder.js` | Microphone capture worklet setup (16kHz) |
-| `app/static/js/pcm-player-processor.js` | AudioWorkletProcessor — ring buffer playback |
-| `app/static/js/pcm-recorder-processor.js` | AudioWorkletProcessor — mic frame capture |
-| `app/static/css/style.css` | Stylesheet — split-pane layout, dark console |
+| `app/main.py` | FastAPI server with WebSocket endpoint `/ws/{user_id}/{session_id}`. Uses `sys.path.insert` to add `app/` dir so `home_agent` imports as top-level package (matches bidi-demo pattern). |
+| `app/home_agent/agent.py` | ADK Agent definition — name: `home_appliance_detector`, model from `HOME_AGENT_MODEL` env var |
+| `app/home_agent/tools.py` | `log_appliance(appliance_type, make, model, location, tool_context, notes="")` — writes to session state |
+| `app/home_agent/__init__.py` | Package init — `from .agent import agent` |
+| `app/__init__.py` | Empty — makes `app` a Python package for test imports |
+| `app/static/index.html` | Web UI — chat panel (left 2/3), side panel (right 1/3) with camera, transcription, event console |
+| `app/static/js/app.js` | Core JS — WebSocket connection with 5s auto-reconnect, camera at 1 FPS, mic toggle, transcription display, inventory counter |
+| `app/static/js/audio-player.js` | `startAudioPlayerWorklet()` — AudioContext at 24kHz, returns `[node, context]` |
+| `app/static/js/audio-recorder.js` | `startAudioRecorderWorklet(handler)` — AudioContext at 16kHz, Float32→Int16 conversion, returns `[node, stream]` |
+| `app/static/js/pcm-player-processor.js` | `PCMPlayerProcessor` — ring buffer (24kHz * 180s), Int16→Float32, stereo output |
+| `app/static/js/pcm-recorder-processor.js` | `PCMProcessor` — captures mic frames, posts Float32 via `port.postMessage` |
+| `app/static/css/style.css` | Split-pane layout, Material Design-inspired, dark console, responsive at 768px |
+| `tests/conftest.py` | Shared `app` fixture for test modules |
+| `tests/test_tools.py` | 5 unit tests for `log_appliance` tool behavior |
+| `tests/test_agent.py` | 7 tests for agent configuration (name, model, tools, instruction content) |
+| `tests/test_main.py` | 6 tests — app init (3), WebSocket endpoint (1), message formats (2) |
 
 ## Build and Run Commands
 
@@ -37,7 +43,7 @@ Browser (camera + mic) → WebSocket → FastAPI → ADK Runner.run_live() → V
 # Install dependencies
 uv sync --all-extras
 
-# Run tests
+# Run all tests (18 total)
 uv run pytest tests/ -v
 
 # Run server
@@ -45,32 +51,46 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 # Run single test file
 uv run pytest tests/test_tools.py -v
+
+# Run with reduced log verbosity
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level info
 ```
+
+## Dependency Versions (resolved)
+
+- `google-adk==1.25.1` (spec: `>=1.20.0`)
+- `fastapi==0.133.0` (spec: `>=0.115.0`)
+- `uvicorn[standard]` (spec: `>=0.32.0`)
+- `google-genai-sdk==1.64.0` (transitive via google-adk)
+- Python 3.12 (spec: `>=3.10`)
 
 ## ADK Patterns Used
 
 - **Agent**: `google.adk.agents.Agent` with model, instruction, and tools
-- **Tool with ToolContext**: `log_appliance` uses `tool_context.state` to read/write session state
-- **LiveRequestQueue**: Queues upstream messages (audio blobs, text content, image blobs) for the Live API
-- **Runner.run_live()**: Async generator yielding events from the bidi-streaming session
-- **RunConfig**: `StreamingMode.BIDI`, `AudioTranscriptionConfig()` for input/output, `SessionResumptionConfig()`
-- **Model**: `gemini-live-2.5-flash-native-audio` (configurable via `HOME_AGENT_MODEL` env var)
+- **Tool with ToolContext**: `log_appliance` uses `tool_context.state` to read/write session state. The `tool_context` param is auto-injected by ADK — not passed by the model.
+- **LiveRequestQueue**: Queues upstream messages via `send_realtime(blob)` for audio/images and `send_content(content)` for text. Closed with `.close()` in `finally` block.
+- **Runner.run_live()**: Async generator yielding `Event` objects. Events serialized via `model_dump_json(exclude_none=True, by_alias=True)`.
+- **RunConfig**: `StreamingMode.BIDI`, `AudioTranscriptionConfig()` for input/output, `SessionResumptionConfig(handle=...)` for reconnection.
+- **Model**: `gemini-live-2.5-flash-native-audio` — connects to Vertex AI via `v1beta1` API. The Live API WebSocket endpoint is `us-central1-aiplatform.googleapis.com`.
 
 ## Environment Variables
 
-Set in `app/.env`:
-- `GOOGLE_CLOUD_PROJECT` — GCP project ID
+Set in `app/.env` (git-ignored, copied from `.env.template`):
+- `GOOGLE_CLOUD_PROJECT` — GCP project ID (currently: `hybrid-vertex`)
 - `GOOGLE_CLOUD_LOCATION` — Region (default: `us-central1`)
 - `GOOGLE_GENAI_USE_VERTEXAI` — Must be `TRUE` for Vertex AI
 - `HOME_AGENT_MODEL` — Optional model override (default: `gemini-live-2.5-flash-native-audio`)
 
+Authentication: Uses Application Default Credentials (`gcloud auth application-default login`).
+
 ## Testing Conventions
 
-- Framework: pytest with pytest-asyncio
-- Config: `asyncio_mode = "auto"` in pyproject.toml
-- Tool tests: Use `unittest.mock.MagicMock` for `ToolContext`
-- Server tests: Use `fastapi.testclient.TestClient`
-- Test files: `tests/test_tools.py`, `tests/test_agent.py`, `tests/test_main.py`
+- Framework: pytest with pytest-asyncio (`asyncio_mode = "auto"`)
+- 18 total tests across 3 files
+- Tool tests (`test_tools.py`): Use `unittest.mock.MagicMock` for `ToolContext` with `mock_context.state = {}` dict
+- Agent tests (`test_agent.py`): Import agent, verify config properties (no mocking needed)
+- Server tests (`test_main.py`): Use `fastapi.testclient.TestClient`. WebSocket tests use unique session IDs to avoid `AlreadyExistsError` from `InMemorySessionService` singleton.
+- No Live API credentials required for tests — tests verify structure and message acceptance, not end-to-end API calls.
 
 ## Session State
 
@@ -85,4 +105,47 @@ The agent stores appliance inventory in `session.state["appliance_inventory"]` a
         "notes": ""
     }
 ]
+```
+
+## Known Behaviors
+
+- **Browser disconnect**: When a browser tab closes, the upstream task logs `Cannot call "receive" once a disconnect message has been received.` — this is expected, not a bug.
+- **Keepalive pings**: The Vertex AI Live API WebSocket sends keepalive pings every 20 seconds. These are handled automatically by the websockets library.
+- **Pydantic warnings**: Suppressed via `warnings.filterwarnings` — caused by `response_modalities` enum serialization.
+- **Session duration**: Vertex AI Live API has a 10-minute session limit (both audio-only and with video). Session resumption is configured but reconnection UI is not yet implemented.
+
+## Project Structure
+
+```
+bidi-adk-live/
+├── app/
+│   ├── __init__.py
+│   ├── main.py                  # FastAPI + WebSocket server
+│   ├── .env                     # Vertex AI config (git-ignored)
+│   ├── home_agent/
+│   │   ├── __init__.py          # from .agent import agent
+│   │   ├── agent.py             # ADK Agent definition
+│   │   └── tools.py             # log_appliance tool
+│   └── static/
+│       ├── index.html
+│       ├── css/style.css
+│       └── js/
+│           ├── app.js
+│           ├── audio-player.js
+│           ├── audio-recorder.js
+│           ├── pcm-player-processor.js
+│           └── pcm-recorder-processor.js
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── test_tools.py            # 5 tests
+│   ├── test_agent.py            # 7 tests
+│   └── test_main.py             # 6 tests
+├── docs/plans/
+│   └── 2026-02-24-home-appliance-detector.md
+├── pyproject.toml
+├── .env.template
+├── .gitignore
+├── CLAUDE.md
+└── README.md
 ```

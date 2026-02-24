@@ -39,9 +39,32 @@ Open http://localhost:8000 in your browser.
 
 ## Testing
 
+### Unit and Integration Tests
+
 ```bash
 uv run pytest tests/ -v
 ```
+
+This runs 18 tests covering tool logic, agent configuration, and WebSocket message handling. No Vertex AI credentials are required for these tests.
+
+### Manual Server Testing
+
+1. Start the server:
+   ```bash
+   uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+   ```
+
+2. Open http://localhost:8000 in Chrome (requires WebRTC support for mic/camera).
+
+3. Verify the connection status indicator in the top-right turns green ("Connected").
+
+4. Click **Camera** — you should see your camera feed in the side panel and the event console should show WebSocket activity.
+
+5. Click **Mic** — speak to the agent. The transcription panel should display your speech in real-time.
+
+6. Point the camera at a home appliance — the agent should describe what it sees and ask if you want to log it. Confirm to test the `log_appliance` tool call. The inventory counter above the controls should increment.
+
+7. Check the **Event Console** (bottom-right) for Live API events. Uncheck "Hide audio events" to see raw audio data events.
 
 ## Architecture
 
