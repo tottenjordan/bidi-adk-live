@@ -9,8 +9,11 @@ let audioRecorderNode = null;
 let micStream = null;
 let isMicActive = false;
 let isCameraActive = false;
+let isScreenActive = false;
 let cameraStream = null;
+let screenStream = null;
 let cameraInterval = null;
+let screenInterval = null;
 const CAMERA_FPS = 1;
 
 // --- DOM Elements ---
@@ -19,14 +22,19 @@ const textForm = document.getElementById("textForm");
 const textInput = document.getElementById("textInput");
 const micBtn = document.getElementById("micBtn");
 const cameraBtn = document.getElementById("cameraBtn");
+const screenBtn = document.getElementById("screenBtn");
+const disconnectBtn = document.getElementById("disconnectBtn");
 const connectionStatus = document.getElementById("connectionStatus");
 const consoleContent = document.getElementById("consoleContent");
 const filterAudioCheckbox = document.getElementById("filterAudio");
-const cameraContainer = document.getElementById("cameraContainer");
+const videoContainer = document.getElementById("videoContainer");
 const cameraPreview = document.getElementById("cameraPreview");
 const captureCanvas = document.getElementById("captureCanvas");
+const videoPlaceholder = document.getElementById("videoPlaceholder");
 const inventoryCount = document.getElementById("inventoryCount");
 const transcriptionContent = document.getElementById("transcriptionContent");
+const debugToggle = document.getElementById("debugToggle");
+const debugPanels = document.getElementById("debugPanels");
 
 // --- Transcription State ---
 let currentInputTranscription = "";
@@ -43,17 +51,18 @@ function connect() {
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {
-    updateConnectionStatus(true);
+    updateConnectionStatus("connected");
     logConsole("system", "Connected to server");
   };
 
   ws.onclose = () => {
-    updateConnectionStatus(false);
+    updateConnectionStatus("disconnected");
     logConsole("system", "Disconnected from server");
     setTimeout(connect, 5000);
   };
 
   ws.onerror = (error) => {
+    updateConnectionStatus("error");
     logConsole("error", `WebSocket error: ${error.message || "Unknown error"}`);
   };
 
@@ -62,11 +71,38 @@ function connect() {
   };
 }
 
-function updateConnectionStatus(connected) {
-  const dot = connectionStatus.querySelector(".status-dot");
-  const text = connectionStatus.querySelector(".status-text");
-  dot.className = `status-dot ${connected ? "connected" : ""}`;
-  text.textContent = connected ? "Connected" : "Disconnected";
+function updateConnectionStatus(state) {
+  connectionStatus.className = `status ${state}`;
+  const labels = {
+    connected: "Connected",
+    disconnected: "Disconnected",
+    error: "Error",
+  };
+  connectionStatus.textContent = labels[state] || "Disconnected";
+}
+
+// --- Disconnect ---
+function disconnect() {
+  if (isMicActive) {
+    stopMicrophone(micStream);
+    micStream = null;
+    isMicActive = false;
+    micBtn.textContent = "Mic";
+    micBtn.classList.remove("active");
+  }
+  if (isCameraActive) {
+    stopCamera();
+  }
+  if (isScreenActive) {
+    stopScreen();
+  }
+  if (ws) {
+    ws.onclose = null; // prevent auto-reconnect
+    ws.close();
+    ws = null;
+  }
+  updateConnectionStatus("disconnected");
+  logConsole("system", "Disconnected by user");
 }
 
 // --- Message Display ---
@@ -86,11 +122,7 @@ function updateAgentMessage(text, isPartial) {
   if (!currentAgentMessageEl) {
     currentAgentMessageEl = addMessage("agent", "");
   }
-  if (isPartial) {
-    currentAgentText = text;
-  } else {
-    currentAgentText = text;
-  }
+  currentAgentText = text;
   currentAgentMessageEl.textContent = currentAgentText;
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
@@ -175,6 +207,12 @@ function updateTranscription(role, text, finished) {
     transcriptionContent.appendChild(entry);
     transcriptionContent.scrollTop = transcriptionContent.scrollHeight;
 
+    // Show finished output transcriptions as agent messages in the chat
+    // so the user sees the text even when audio can't play yet.
+    if (role === "agent" && text.trim()) {
+      addMessage("agent", text);
+    }
+
     if (role === "user") currentInputTranscription = "";
     else currentOutputTranscription = "";
   }
@@ -215,7 +253,7 @@ async function toggleMicrophone() {
     stopMicrophone(micStream);
     micStream = null;
     isMicActive = false;
-    micBtn.querySelector(".btn-label").textContent = "Mic Off";
+    micBtn.textContent = "Mic";
     micBtn.classList.remove("active");
   } else {
     await initAudioPlayer();
@@ -225,7 +263,7 @@ async function toggleMicrophone() {
       }
     });
     isMicActive = true;
-    micBtn.querySelector(".btn-label").textContent = "Mic On";
+    micBtn.textContent = "Mic On";
     micBtn.classList.add("active");
   }
 }
@@ -235,6 +273,10 @@ async function toggleCamera() {
   if (isCameraActive) {
     stopCamera();
   } else {
+    // Stop screen share if active (mutually exclusive)
+    if (isScreenActive) {
+      stopScreen();
+    }
     await startCamera();
   }
 }
@@ -245,9 +287,10 @@ async function startCamera() {
       video: { width: 768, height: 768, facingMode: "environment" },
     });
     cameraPreview.srcObject = cameraStream;
-    cameraContainer.style.display = "block";
+    cameraPreview.classList.add("active");
+    videoPlaceholder.style.display = "none";
     isCameraActive = true;
-    cameraBtn.querySelector(".btn-label").textContent = "Camera On";
+    cameraBtn.textContent = "Camera On";
     cameraBtn.classList.add("active");
 
     cameraInterval = setInterval(captureAndSendFrame, 1000 / CAMERA_FPS);
@@ -266,9 +309,12 @@ function stopCamera() {
     cameraStream = null;
   }
   cameraPreview.srcObject = null;
-  cameraContainer.style.display = "none";
+  cameraPreview.classList.remove("active");
+  if (!isScreenActive) {
+    videoPlaceholder.style.display = "flex";
+  }
   isCameraActive = false;
-  cameraBtn.querySelector(".btn-label").textContent = "Camera Off";
+  cameraBtn.textContent = "Camera";
   cameraBtn.classList.remove("active");
 }
 
@@ -293,6 +339,91 @@ function captureAndSendFrame() {
       data: base64Data,
     })
   );
+}
+
+// --- Screen Share ---
+async function toggleScreen() {
+  if (isScreenActive) {
+    stopScreen();
+  } else {
+    // Stop camera if active (mutually exclusive)
+    if (isCameraActive) {
+      stopCamera();
+    }
+    await startScreen();
+  }
+}
+
+async function startScreen() {
+  try {
+    screenStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { width: 1280, height: 720 },
+    });
+    cameraPreview.srcObject = screenStream;
+    cameraPreview.classList.add("active");
+    videoPlaceholder.style.display = "none";
+    isScreenActive = true;
+    screenBtn.textContent = "Screen On";
+    screenBtn.classList.add("active");
+
+    // Stop sharing when the user clicks "Stop sharing" in the browser UI
+    screenStream.getVideoTracks()[0].addEventListener("ended", () => {
+      stopScreen();
+    });
+
+    screenInterval = setInterval(captureAndSendScreenFrame, 1000 / CAMERA_FPS);
+  } catch (err) {
+    logConsole("error", `Screen share error: ${err.message}`);
+  }
+}
+
+function stopScreen() {
+  if (screenInterval) {
+    clearInterval(screenInterval);
+    screenInterval = null;
+  }
+  if (screenStream) {
+    screenStream.getTracks().forEach((track) => track.stop());
+    screenStream = null;
+  }
+  cameraPreview.srcObject = null;
+  cameraPreview.classList.remove("active");
+  if (!isCameraActive) {
+    videoPlaceholder.style.display = "flex";
+  }
+  isScreenActive = false;
+  screenBtn.textContent = "Screen";
+  screenBtn.classList.remove("active");
+}
+
+function captureAndSendScreenFrame() {
+  if (!screenStream || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+  const video = cameraPreview;
+  const canvas = captureCanvas;
+  canvas.width = video.videoWidth || 1280;
+  canvas.height = video.videoHeight || 720;
+
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+  const base64Data = dataUrl.split(",")[1];
+
+  ws.send(
+    JSON.stringify({
+      type: "image",
+      mimeType: "image/jpeg",
+      data: base64Data,
+    })
+  );
+}
+
+// --- Debug Panel Toggle ---
+function toggleDebugPanel() {
+  const isHidden = debugPanels.style.display === "none";
+  debugPanels.style.display = isHidden ? "grid" : "none";
+  debugToggle.textContent = isHidden ? "Hide Debug Panel" : "Show Debug Panel";
 }
 
 // --- Text Input ---
@@ -344,6 +475,9 @@ function logConsole(author, message, isAudio = false) {
 // --- Event Listeners ---
 micBtn.addEventListener("click", toggleMicrophone);
 cameraBtn.addEventListener("click", toggleCamera);
+screenBtn.addEventListener("click", toggleScreen);
+disconnectBtn.addEventListener("click", disconnect);
+debugToggle.addEventListener("click", toggleDebugPanel);
 
 // --- Initialize ---
 connect();

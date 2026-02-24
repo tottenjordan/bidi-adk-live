@@ -90,6 +90,14 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str
 
     # --- Phase 3: Concurrent upstream/downstream tasks ---
 
+    # Send an initial message to trigger the agent greeting
+    live_request_queue.send_content(
+        types.Content(
+            role="user",
+            parts=[types.Part(text="Hello, I just connected. Please greet me.")],
+        )
+    )
+
     async def upstream_task():
         """Receive client messages and queue them for the agent."""
         try:
