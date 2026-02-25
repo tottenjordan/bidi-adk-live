@@ -25,7 +25,6 @@ const screenBtn = document.getElementById("screenBtn");
 const disconnectBtn = document.getElementById("disconnectBtn");
 const connectionStatus = document.getElementById("connectionStatus");
 const consoleContent = document.getElementById("consoleContent");
-const filterAudioCheckbox = document.getElementById("filterAudio");
 const videoContainer = document.getElementById("videoContainer");
 const cameraPreview = document.getElementById("cameraPreview");
 const captureCanvas = document.getElementById("captureCanvas");
