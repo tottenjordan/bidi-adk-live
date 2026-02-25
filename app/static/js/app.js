@@ -154,6 +154,7 @@ function updateAgentMessage(text, isPartial) {
 function finalizeAgentMessage() {
   currentAgentMessageEl = null;
   currentAgentText = "";
+  accumulatedOutputTranscription = "";
 }
 
 // --- Server Event Handling ---
@@ -186,6 +187,10 @@ function handleServerEvent(data) {
 
   if (event.input_transcription?.text) {
     updateTranscription("user", event.input_transcription.text, event.input_transcription.finished);
+    // Show finished user transcription in chat so user sees what the model heard
+    if (event.input_transcription.finished) {
+      addMessage("user", event.input_transcription.text);
+    }
   }
   if (event.output_transcription?.text) {
     const finished = event.output_transcription.finished;
