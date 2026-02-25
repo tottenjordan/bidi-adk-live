@@ -1,19 +1,31 @@
 /**
  * AudioWorkletProcessor for microphone PCM capture.
- * Captures Float32 audio frames from the microphone and sends them
- * to the main thread via port.postMessage for WebSocket transmission.
+ * Accumulates samples into a 4096-sample buffer before sending
+ * to reduce WebSocket message frequency.
  */
 class PCMProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
+    this.bufferSize = 4096;
+    this.buffer = new Float32Array(this.bufferSize);
+    this.bufferIndex = 0;
   }
 
   process(inputs, outputs, parameters) {
-    if (inputs.length > 0 && inputs[0].length > 0) {
-      const inputChannel = inputs[0][0];
-      const inputCopy = new Float32Array(inputChannel);
-      this.port.postMessage(inputCopy);
+    const input = inputs[0];
+    if (!input || !input.length) return true;
+
+    const channelData = input[0];
+
+    for (let i = 0; i < channelData.length; i++) {
+      this.buffer[this.bufferIndex++] = channelData[i];
+
+      if (this.bufferIndex >= this.bufferSize) {
+        this.port.postMessage(this.buffer.slice());
+        this.bufferIndex = 0;
+      }
     }
+
     return true;
   }
 }
