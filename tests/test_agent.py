@@ -26,11 +26,11 @@ class TestAgentConfiguration:
         assert agent.model is not None
 
     def test_agent_has_log_appliance_tool(self):
-        """Agent has the log_appliance tool registered."""
+        """Agent has the log_appliance_bq tool registered."""
         from app.home_agent import agent
 
         tool_names = [t.__name__ if callable(t) else str(t) for t in agent.tools]
-        assert "log_appliance" in tool_names
+        assert "log_appliance_bq" in tool_names
 
     def test_agent_has_instruction(self):
         """Agent has a non-empty instruction."""

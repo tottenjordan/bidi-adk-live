@@ -5,7 +5,7 @@ import os
 
 from google.adk.agents import Agent
 
-from .tools import log_appliance
+from .tools_bq import log_appliance_bq
 
 MODEL = os.getenv(
     "HOME_AGENT_MODEL",
@@ -43,7 +43,7 @@ For each appliance approved by the user, capture the following details:
 4. **CONFIRM**: ASK the user to confirm which part of the house the appliance is in (e.g., kitchen, laundry room, etc.)
 5. Lastly, ask the user if there are any additional notes worth capturing about the appliance.
 
-AFTER capturing the FIVE details above, call the `log_appliance` tool.
+AFTER capturing the FIVE details above, call the `log_appliance_bq` tool.
 - After the function tool call, give a brief confirmation and wait for the user to show the next appliance
 
 **CRITICAL - Avoid Hallucination**:
@@ -71,5 +71,5 @@ INVENTORY STATE:
 This variable should be a list of dictionary entries, where each entry corresponds to one home appliance.
 - Check this before logging to avoid duplicates.
 """,
-    tools=[log_appliance],
+    tools=[log_appliance_bq],
 )
