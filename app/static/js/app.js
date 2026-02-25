@@ -38,6 +38,8 @@ const appSection = document.getElementById("appSection");
 const sessionEndSection = document.getElementById("sessionEndSection");
 const connectBtn = document.getElementById("connectBtn");
 const restartBtn = document.getElementById("restartBtn");
+const liveAgentText = document.getElementById("liveAgentText");
+const liveUserText = document.getElementById("liveUserText");
 
 // --- Transcription State ---
 let currentInputTranscription = "";
@@ -78,7 +80,7 @@ function connect() {
     if (typeof event.data === "string") {
       // JSON text frame — event metadata (transcriptions, turn_complete, etc.)
       handleServerEvent(event.data);
-    } else {
+    } else if (audioContext) {
       // Binary frame — raw PCM audio from Gemini
       playAudioChunk(audioContext, event.data);
     }
@@ -154,6 +156,7 @@ function finalizeAgentMessage() {
   currentAgentMessageEl = null;
   currentAgentText = "";
   accumulatedOutputTranscription = "";
+  if (liveAgentText) liveAgentText.textContent = "";
 }
 
 // --- Server Event Handling ---
@@ -166,14 +169,6 @@ function handleServerEvent(data) {
   }
 
   logConsole(event.author || "system", JSON.stringify(event, null, 2));
-
-  if (event.content?.parts) {
-    for (const part of event.content.parts) {
-      if (part.text) {
-        updateAgentMessage(part.text, event.partial === true);
-      }
-    }
-  }
 
   if (event.turn_complete) {
     finalizeAgentMessage();
@@ -221,9 +216,11 @@ function handleServerEvent(data) {
 // --- Transcription Display ---
 function updateTranscription(role, text, finished) {
   if (role === "user") {
-    currentInputTranscription = text;
+    currentInputTranscription = finished ? text : currentInputTranscription + text;
+    if (liveUserText) liveUserText.textContent = currentInputTranscription;
   } else {
     currentOutputTranscription = text;
+    if (liveAgentText) liveAgentText.textContent = accumulatedOutputTranscription;
   }
 
   if (finished) {
@@ -233,8 +230,12 @@ function updateTranscription(role, text, finished) {
     transcriptionContent.appendChild(entry);
     transcriptionContent.scrollTop = transcriptionContent.scrollHeight;
 
-    if (role === "user") currentInputTranscription = "";
-    else currentOutputTranscription = "";
+    if (role === "user") {
+      currentInputTranscription = "";
+      if (liveUserText) liveUserText.textContent = "";
+    } else {
+      currentOutputTranscription = "";
+    }
   }
 }
 
@@ -528,6 +529,8 @@ restartBtn.addEventListener("click", () => {
   messagesEl.innerHTML = "";
   transcriptionContent.innerHTML = "";
   consoleContent.innerHTML = "";
+  if (liveAgentText) liveAgentText.textContent = "";
+  if (liveUserText) liveUserText.textContent = "";
 
   // Reset agent message state
   currentAgentMessageEl = null;

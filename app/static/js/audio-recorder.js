@@ -1,12 +1,26 @@
 /**
- * Initializes microphone capture at 16kHz and streams PCM data via callback.
- * @param {Function} audioRecorderHandler - Called with Int16Array PCM chunks
- * @returns {[AudioWorkletNode, MediaStream]} - Node and stream for cleanup
+ * Microphone capture using a shared AudioContext.
+ * Downsamples from native sample rate to 16kHz for the Gemini Live API.
+ * Uses a zero-gain node to prevent mic audio feedback to speakers.
+ *
+ * @param {AudioContext} audioContext - Shared AudioContext (browser default rate)
+ * @param {Function} audioRecorderHandler - Called with Int16Array PCM chunks at 16kHz
+ * @returns {Promise<[AudioWorkletNode, MediaStream]>} - Node and stream for cleanup
  */
-export async function startAudioRecorderWorklet(audioRecorderHandler) {
-  const audioContext = new AudioContext({ sampleRate: 16000 });
-  const workletURL = new URL("./pcm-recorder-processor.js", import.meta.url);
-  await audioContext.audioWorklet.addModule(workletURL);
+let workletRegistered = false;
+
+export async function startAudioRecorderWorklet(audioContext, audioRecorderHandler) {
+  // Ensure context is running (may be suspended if user gesture was earlier)
+  if (audioContext.state === "suspended") {
+    await audioContext.resume();
+  }
+
+  // Only register the worklet module once per AudioContext
+  if (!workletRegistered) {
+    const workletURL = new URL("./pcm-recorder-processor.js", import.meta.url);
+    await audioContext.audioWorklet.addModule(workletURL);
+    workletRegistered = true;
+  }
 
   const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const source = audioContext.createMediaStreamSource(micStream);
@@ -14,12 +28,18 @@ export async function startAudioRecorderWorklet(audioRecorderHandler) {
 
   recorderNode.port.onmessage = (event) => {
     const float32Data = event.data;
-    const int16Data = convertFloat32ToPCM(float32Data);
+    const downsampled = downsampleBuffer(float32Data, audioContext.sampleRate, 16000);
+    const int16Data = convertFloat32ToPCM(downsampled);
     audioRecorderHandler(int16Data);
   };
 
   source.connect(recorderNode);
-  recorderNode.connect(audioContext.destination);
+
+  // Mute local feedback — connect through zero-gain node
+  const muteGain = audioContext.createGain();
+  muteGain.gain.value = 0;
+  recorderNode.connect(muteGain);
+  muteGain.connect(audioContext.destination);
 
   return [recorderNode, micStream];
 }
@@ -31,6 +51,36 @@ export function stopMicrophone(micStream) {
   if (micStream) {
     micStream.getTracks().forEach((track) => track.stop());
   }
+}
+
+/**
+ * Resets worklet registration state. Call when creating a new AudioContext.
+ */
+export function resetRecorderState() {
+  workletRegistered = false;
+}
+
+/**
+ * Downsamples a Float32Array buffer from one sample rate to another.
+ * Uses simple averaging for anti-aliasing.
+ */
+function downsampleBuffer(buffer, fromRate, toRate) {
+  if (fromRate === toRate) return buffer;
+  const ratio = fromRate / toRate;
+  const newLength = Math.round(buffer.length / ratio);
+  const result = new Float32Array(newLength);
+  for (let i = 0; i < newLength; i++) {
+    const start = Math.round(i * ratio);
+    const end = Math.round((i + 1) * ratio);
+    let sum = 0;
+    let count = 0;
+    for (let j = start; j < end && j < buffer.length; j++) {
+      sum += buffer[j];
+      count++;
+    }
+    result[i] = sum / count;
+  }
+  return result;
 }
 
 /**

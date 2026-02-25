@@ -22,14 +22,13 @@ Browser (camera + mic) → WebSocket → FastAPI → ADK Runner.run_live() → V
 |------|---------|
 | `app/main.py` | FastAPI server with WebSocket endpoint `/ws/{user_id}/{session_id}`. Uses `sys.path.insert` to add `app/` dir so `home_agent` imports as top-level package (matches bidi-demo pattern). |
 | `app/home_agent/agent.py` | ADK Agent definition — name: `home_appliance_detector`, model from `HOME_AGENT_MODEL` env var |
-| `app/home_agent/tools.py` | `log_appliance(appliance_type, make, model, location, tool_context, notes="")` — writes to session state |
+| `app/home_agent/tools.py` | `log_appliance(appliance_type, make, model, location, finish, tool_context, notes="", user_id="default_user")` — writes to session state |
 | `app/home_agent/__init__.py` | Package init — `from .agent import agent` |
 | `app/__init__.py` | Empty — makes `app` a Python package for test imports |
-| `app/static/index.html` | Web UI — chat panel (left 2/3), side panel (right 1/3) with camera, transcription, event console |
-| `app/static/js/app.js` | Core JS — WebSocket connection with 5s auto-reconnect, camera at 1 FPS, mic toggle, transcription display, inventory counter |
-| `app/static/js/audio-player.js` | `startAudioPlayerWorklet()` — AudioContext at 24kHz, returns `[node, context]` |
-| `app/static/js/audio-recorder.js` | `startAudioRecorderWorklet(handler)` — AudioContext at 16kHz, Float32→Int16 conversion, returns `[node, stream]` |
-| `app/static/js/pcm-player-processor.js` | `PCMPlayerProcessor` — ring buffer (24kHz * 180s), Int16→Float32, stereo output |
+| `app/static/index.html` | Web UI — 3-section flow (auth → app → session-end), video+controls left, chat right, live transcription overlay, debug panels |
+| `app/static/js/app.js` | Core JS — WebSocket connection, camera/screen at 1 FPS, mic toggle, live transcription overlay, chat from output transcriptions, inventory counter |
+| `app/static/js/audio-player.js` | `playAudioChunk(audioContext, arrayBuffer)` — gapless `createBufferSource` scheduling at 24kHz, `stopAudioPlayback()` for interrupts |
+| `app/static/js/audio-recorder.js` | `startAudioRecorderWorklet(audioContext, handler)` — shared AudioContext, downsamples native→16kHz, zero-gain feedback mute |
 | `app/static/js/pcm-recorder-processor.js` | `PCMProcessor` — captures mic frames, posts Float32 via `port.postMessage` |
 | `app/static/css/style.css` | Split-pane layout, Material Design-inspired, dark console, responsive at 768px |
 | `tests/conftest.py` | Shared `app` fixture for test modules |
@@ -70,7 +69,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level info
 - **Tool with ToolContext**: `log_appliance` uses `tool_context.state` to read/write session state. The `tool_context` param is auto-injected by ADK — not passed by the model.
 - **LiveRequestQueue**: Queues upstream messages via `send_realtime(blob)` for audio/images and `send_content(content)` for text. Closed with `.close()` in `finally` block.
 - **Runner.run_live()**: Async generator yielding `Event` objects. Events serialized via `model_dump_json(exclude_none=True, by_alias=True)`.
-- **RunConfig**: `StreamingMode.BIDI`, `AudioTranscriptionConfig()` for input/output, `SessionResumptionConfig(handle=...)` for reconnection.
+- **RunConfig**: `StreamingMode.BIDI`, `AudioTranscriptionConfig()` for input/output, `SessionResumptionConfig(handle=...)` for reconnection, `ProactivityConfig(proactive_audio=True)` for unprompted agent observations.
 - **Model**: `gemini-live-2.5-flash-native-audio` — connects to Vertex AI via `v1beta1` API. The Live API WebSocket endpoint is `us-central1-aiplatform.googleapis.com`.
 
 ## Environment Variables
@@ -102,7 +101,9 @@ The agent stores appliance inventory in `session.state["appliance_inventory"]` a
         "make": "Samsung",
         "model": "RF28R7351SR",
         "location": "kitchen",
-        "notes": ""
+        "finish": "stainless steel",
+        "notes": "",
+        "user_id": "default_user"
     }
 ]
 ```
@@ -133,7 +134,6 @@ bidi-adk-live/
 │           ├── app.js
 │           ├── audio-player.js
 │           ├── audio-recorder.js
-│           ├── pcm-player-processor.js
 │           └── pcm-recorder-processor.js
 ├── tests/
 │   ├── __init__.py

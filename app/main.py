@@ -156,6 +156,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str
                 run_config=run_config,
             ):
                 # Extract and send audio as binary frames
+                has_audio = False
                 if event.content and event.content.parts:
                     non_audio_parts = []
                     for part in event.content.parts:
@@ -166,24 +167,30 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str
                         ):
                             # Send raw audio bytes as binary WebSocket frame
                             await websocket.send_bytes(part.inline_data.data)
+                            has_audio = True
                         else:
                             non_audio_parts.append(part)
 
                     # Replace parts with non-audio parts only
-                    event.content.parts = non_audio_parts if non_audio_parts else None
-
-                    # If no content remains after stripping audio, clear it
-                    if not event.content.parts:
+                    if non_audio_parts:
+                        event.content.parts = non_audio_parts
+                    else:
                         event.content = None
 
-                # Send remaining event metadata as JSON text
-                # (transcriptions, turn_complete, interrupted, function_response, etc.)
-                event_json = event.model_dump_json(
-                    exclude_none=True, by_alias=True
+                # Only send JSON if the event has data the frontend needs:
+                # content with non-audio parts, transcriptions, turn signals, etc.
+                # Skip audio-only events that have no other useful fields.
+                has_useful_data = (
+                    event.content
+                    or event.turn_complete
+                    or event.interrupted
+                    or event.input_transcription
+                    or event.output_transcription
                 )
-                # Always send the event JSON — even if content was stripped,
-                # there may be turn_complete, interrupted, transcription fields
-                if event_json != "{}":
+                if has_useful_data:
+                    event_json = event.model_dump_json(
+                        exclude_none=True, by_alias=True
+                    )
                     await websocket.send_text(event_json)
         except WebSocketDisconnect:
             logger.info("Client disconnected (downstream): user=%s", user_id)

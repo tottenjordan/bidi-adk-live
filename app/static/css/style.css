@@ -86,6 +86,107 @@ header h1 {
   color: #c5221f;
 }
 
+.status.connecting {
+  background: #fef7e0;
+  color: #b06000;
+}
+
+/* --- Hidden utility --- */
+.hidden {
+  display: none !important;
+}
+
+/* --- Auth Section --- */
+.auth-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 3rem;
+  background: var(--surface-dim);
+  border-radius: 8px;
+  text-align: center;
+  gap: 1.5rem;
+}
+
+.auth-section h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+.auth-section p {
+  max-width: 480px;
+  color: var(--on-surface-secondary);
+  line-height: 1.5;
+}
+
+.feature-list {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.feature-item {
+  padding: 8px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--on-surface-secondary);
+}
+
+.btn-connect {
+  padding: 1rem 2.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-connect:hover {
+  background: var(--primary-dark);
+}
+
+.btn-connect:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* --- Session End Section --- */
+.session-end-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 3rem;
+  background: var(--surface-dim);
+  border-radius: 8px;
+  text-align: center;
+  gap: 1.5rem;
+  animation: fadeIn 0.5s ease-in-out;
+}
+
+.session-end-section h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+.session-end-section p {
+  color: var(--on-surface-secondary);
+  line-height: 1.5;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* --- Main Grid --- */
 main {
   display: flex;
@@ -145,6 +246,43 @@ main {
 .controls {
   display: flex;
   gap: 0.5rem;
+}
+
+/* --- Live Transcription Box --- */
+.live-transcription {
+  background: var(--console-bg);
+  border-radius: 8px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 64px;
+}
+
+.live-transcription-line {
+  display: flex;
+  gap: 8px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  min-height: 1.4em;
+}
+
+.live-transcription-line .live-label {
+  font-weight: 600;
+  flex-shrink: 0;
+  min-width: 48px;
+}
+
+.live-transcription-line.agent .live-label {
+  color: var(--success);
+}
+
+.live-transcription-line.user .live-label {
+  color: var(--primary);
+}
+
+.live-transcription-line .live-text {
+  color: var(--console-text);
 }
 
 .btn {

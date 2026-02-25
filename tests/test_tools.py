@@ -21,6 +21,7 @@ class TestLogAppliance:
             make="Samsung",
             model="RF28R7351SR",
             location="kitchen",
+            finish="stainless steel",
             tool_context=mock_context,
         )
 
@@ -31,6 +32,8 @@ class TestLogAppliance:
         assert entry["make"] == "Samsung"
         assert entry["model"] == "RF28R7351SR"
         assert entry["location"] == "kitchen"
+        assert entry["finish"] == "stainless steel"
+        assert entry["user_id"] == "default_user"
 
     def test_log_appliance_appends_to_existing_inventory(self):
         """Subsequent appliances append to the list."""
@@ -45,6 +48,7 @@ class TestLogAppliance:
             make="Bosch",
             model="SHPM88Z75N",
             location="kitchen",
+            finish="black",
             tool_context=mock_context,
         )
 
@@ -65,6 +69,7 @@ class TestLogAppliance:
             make="LG",
             model="WM4000HWA",
             location="laundry room",
+            finish="white",
             notes="Front loader, purchased 2024",
             tool_context=mock_context,
         )
@@ -85,6 +90,7 @@ class TestLogAppliance:
             make="Panasonic",
             model="NN-SN66KB",
             location="kitchen",
+            finish="black",
             tool_context=mock_context,
         )
 
@@ -107,6 +113,7 @@ class TestLogAppliance:
             make="Samsung",
             model="DVE45R6100W",
             location="laundry room",
+            finish="white",
             tool_context=mock_context,
         )
 
