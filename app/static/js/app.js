@@ -1,10 +1,9 @@
-import { startAudioPlayerWorklet } from "./audio-player.js";
-import { startAudioRecorderWorklet, stopMicrophone } from "./audio-recorder.js";
+import { playAudioChunk, stopAudioPlayback } from "./audio-player.js";
+import { startAudioRecorderWorklet, stopMicrophone, resetRecorderState } from "./audio-recorder.js";
 
 // --- State ---
 let ws = null;
-let audioPlayerNode = null;
-let audioPlayerContext = null;
+let audioContext = null;
 let audioRecorderNode = null;
 let micStream = null;
 let isMicActive = false;
@@ -35,6 +34,11 @@ const inventoryCount = document.getElementById("inventoryCount");
 const transcriptionContent = document.getElementById("transcriptionContent");
 const debugToggle = document.getElementById("debugToggle");
 const debugPanels = document.getElementById("debugPanels");
+const authSection = document.getElementById("authSection");
+const appSection = document.getElementById("appSection");
+const sessionEndSection = document.getElementById("sessionEndSection");
+const connectBtn = document.getElementById("connectBtn");
+const restartBtn = document.getElementById("restartBtn");
 
 // --- Transcription State ---
 let currentInputTranscription = "";
@@ -59,7 +63,11 @@ function connect() {
   ws.onclose = () => {
     updateConnectionStatus("disconnected");
     logConsole("system", "Disconnected from server");
-    setTimeout(connect, 5000);
+    // Show session end screen if app section is visible (unexpected disconnect)
+    if (!appSection.classList.contains("hidden")) {
+      appSection.classList.add("hidden");
+      sessionEndSection.classList.remove("hidden");
+    }
   };
 
   ws.onerror = (error) => {
@@ -68,7 +76,13 @@ function connect() {
   };
 
   ws.onmessage = (event) => {
-    handleServerEvent(event.data);
+    if (typeof event.data === "string") {
+      // JSON text frame — event metadata (transcriptions, turn_complete, etc.)
+      handleServerEvent(event.data);
+    } else {
+      // Binary frame — raw PCM audio from Gemini
+      playAudioChunk(audioContext, event.data);
+    }
   };
 }
 
@@ -77,6 +91,7 @@ function updateConnectionStatus(state) {
   const labels = {
     connected: "Connected",
     disconnected: "Disconnected",
+    connecting: "Connecting...",
     error: "Error",
   };
   connectionStatus.textContent = labels[state] || "Disconnected";
@@ -98,12 +113,20 @@ function disconnect() {
     stopScreen();
   }
   if (ws) {
-    ws.onclose = null; // prevent auto-reconnect
+    ws.onclose = null; // prevent onclose handler from firing
     ws.close();
     ws = null;
   }
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
+    resetRecorderState();
+  }
   updateConnectionStatus("disconnected");
   logConsole("system", "Disconnected by user");
+  // Transition to session-end screen
+  appSection.classList.add("hidden");
+  sessionEndSection.classList.remove("hidden");
 }
 
 // --- Message Display ---
@@ -142,17 +165,10 @@ function handleServerEvent(data) {
     return;
   }
 
-  const isAudioEvent = hasAudioData(event);
-
-  if (!isAudioEvent || !filterAudioCheckbox.checked) {
-    logConsole(event.author || "system", JSON.stringify(event, null, 2), isAudioEvent);
-  }
+  logConsole(event.author || "system", JSON.stringify(event, null, 2));
 
   if (event.content?.parts) {
     for (const part of event.content.parts) {
-      if (part.inline_data?.mime_type?.startsWith("audio/")) {
-        playAudio(part.inline_data.data);
-      }
       if (part.text) {
         updateAgentMessage(part.text, event.partial === true);
       }
@@ -164,9 +180,7 @@ function handleServerEvent(data) {
   }
 
   if (event.interrupted) {
-    if (audioPlayerNode) {
-      audioPlayerNode.port.postMessage("endOfAudio");
-    }
+    stopAudioPlayback(audioContext);
     finalizeAgentMessage();
   }
 
@@ -200,13 +214,6 @@ function handleServerEvent(data) {
   }
 }
 
-function hasAudioData(event) {
-  if (!event.content?.parts) return false;
-  return event.content.parts.some(
-    (p) => p.inline_data?.mime_type?.startsWith("audio/")
-  );
-}
-
 // --- Transcription Display ---
 function updateTranscription(role, text, finished) {
   if (role === "user") {
@@ -238,24 +245,6 @@ function updateInventoryCount(count) {
   inventoryCount.textContent = `${count} appliance${count !== 1 ? "s" : ""}`;
 }
 
-// --- Audio Playback ---
-async function initAudioPlayer() {
-  if (!audioPlayerNode) {
-    [audioPlayerNode, audioPlayerContext] = await startAudioPlayerWorklet();
-  }
-}
-
-function playAudio(base64Data) {
-  if (!audioPlayerNode) return;
-  const binaryStr = atob(base64Data);
-  const bytes = new Uint8Array(binaryStr.length);
-  for (let i = 0; i < binaryStr.length; i++) {
-    bytes[i] = binaryStr.charCodeAt(i);
-  }
-  const int16Data = new Int16Array(bytes.buffer);
-  audioPlayerNode.port.postMessage(int16Data);
-}
-
 // --- Microphone ---
 async function toggleMicrophone() {
   if (isMicActive) {
@@ -264,16 +253,22 @@ async function toggleMicrophone() {
     isMicActive = false;
     micBtn.textContent = "Mic";
     micBtn.classList.remove("active");
+    logConsole("system", "Microphone stopped");
   } else {
-    await initAudioPlayer();
-    [audioRecorderNode, micStream] = await startAudioRecorderWorklet((pcmData) => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(pcmData.buffer);
-      }
-    });
-    isMicActive = true;
-    micBtn.textContent = "Mic On";
-    micBtn.classList.add("active");
+    try {
+      [audioRecorderNode, micStream] = await startAudioRecorderWorklet(audioContext, (pcmData) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(pcmData.buffer);
+        }
+      });
+      isMicActive = true;
+      micBtn.textContent = "Mic On";
+      micBtn.classList.add("active");
+      logConsole("system", `Microphone started (sample rate: ${audioContext.sampleRate}Hz, downsampling to 16000Hz)`);
+    } catch (err) {
+      logConsole("error", `Microphone error: ${err.message}`);
+      console.error("Microphone error:", err);
+    }
   }
 }
 
@@ -447,9 +442,9 @@ textForm.addEventListener("submit", (e) => {
 });
 
 // --- Console Logging ---
-function logConsole(author, message, isAudio = false) {
+function logConsole(author, message) {
   const entry = document.createElement("div");
-  entry.className = `console-entry ${isAudio ? "audio-event" : ""}`;
+  entry.className = "console-entry";
 
   const timestamp = new Date().toLocaleTimeString();
   const badge = author === "system" ? "SYS" : author === "error" ? "ERR" : author.toUpperCase().slice(0, 3);
@@ -488,5 +483,55 @@ screenBtn.addEventListener("click", toggleScreen);
 disconnectBtn.addEventListener("click", disconnect);
 debugToggle.addEventListener("click", toggleDebugPanel);
 
-// --- Initialize ---
-connect();
+// --- Connect Button ---
+connectBtn.addEventListener("click", async () => {
+  connectBtn.disabled = true;
+  connectBtn.textContent = "Connecting...";
+  updateConnectionStatus("connecting");
+
+  try {
+    // Create single shared AudioContext on user gesture (satisfies browser autoplay policy)
+    audioContext = new AudioContext();
+    // Start WebSocket connection
+    connect();
+    // Toggle sections
+    authSection.classList.add("hidden");
+    appSection.classList.remove("hidden");
+  } catch (error) {
+    connectBtn.disabled = false;
+    connectBtn.textContent = "Connect";
+    updateConnectionStatus("error");
+    logConsole("error", `Connection failed: ${error.message}`);
+  }
+});
+
+// --- Restart Button ---
+restartBtn.addEventListener("click", () => {
+  // Clean up AudioContext
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
+    resetRecorderState();
+  }
+
+  // Reset UI state
+  sessionEndSection.classList.add("hidden");
+  authSection.classList.remove("hidden");
+  connectBtn.disabled = false;
+  connectBtn.textContent = "Connect";
+
+  // Clear chat and transcription
+  messagesEl.innerHTML = "";
+  transcriptionContent.innerHTML = "";
+  consoleContent.innerHTML = "";
+
+  // Reset agent message state
+  currentAgentMessageEl = null;
+  currentAgentText = "";
+  accumulatedOutputTranscription = "";
+
+  // Reset inventory
+  inventoryCount.textContent = "0 appliances";
+
+  updateConnectionStatus("disconnected");
+});
