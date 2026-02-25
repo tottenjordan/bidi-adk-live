@@ -81,6 +81,14 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str
     run_config = RunConfig(
         streaming_mode=StreamingMode.BIDI,
         response_modalities=response_modalities,
+        speech_config=types.SpeechConfig(
+            voice_config=types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                    voice_name="Aoede"
+                )
+            )
+        ),
+        proactivity=types.ProactivityConfig(proactive_audio=True),
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
         session_resumption=types.SessionResumptionConfig(
@@ -135,7 +143,11 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str
             logger.exception("Upstream error: %s", e)
 
     async def downstream_task():
-        """Stream agent events back to the client."""
+        """Stream agent events back to the client.
+
+        Audio data is sent as binary WebSocket frames for low-latency playback.
+        All other event data (transcriptions, turn_complete, etc.) is sent as JSON text.
+        """
         try:
             async for event in runner.run_live(
                 session_id=session_id,
@@ -143,10 +155,36 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str
                 live_request_queue=live_request_queue,
                 run_config=run_config,
             ):
+                # Extract and send audio as binary frames
+                if event.content and event.content.parts:
+                    non_audio_parts = []
+                    for part in event.content.parts:
+                        if (
+                            part.inline_data
+                            and part.inline_data.mime_type
+                            and part.inline_data.mime_type.startswith("audio/")
+                        ):
+                            # Send raw audio bytes as binary WebSocket frame
+                            await websocket.send_bytes(part.inline_data.data)
+                        else:
+                            non_audio_parts.append(part)
+
+                    # Replace parts with non-audio parts only
+                    event.content.parts = non_audio_parts if non_audio_parts else None
+
+                    # If no content remains after stripping audio, clear it
+                    if not event.content.parts:
+                        event.content = None
+
+                # Send remaining event metadata as JSON text
+                # (transcriptions, turn_complete, interrupted, function_response, etc.)
                 event_json = event.model_dump_json(
                     exclude_none=True, by_alias=True
                 )
-                await websocket.send_text(event_json)
+                # Always send the event JSON — even if content was stripped,
+                # there may be turn_complete, interrupted, transcription fields
+                if event_json != "{}":
+                    await websocket.send_text(event_json)
         except WebSocketDisconnect:
             logger.info("Client disconnected (downstream): user=%s", user_id)
         except Exception as e:
