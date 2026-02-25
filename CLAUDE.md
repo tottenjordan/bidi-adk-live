@@ -13,7 +13,7 @@ Browser (camera + mic) → WebSocket → FastAPI → ADK Runner.run_live() → V
 
 - **Upstream**: Browser sends audio (binary PCM @ 16kHz), text (JSON), and images (JPEG base64 JSON @ 1 FPS) via WebSocket. FastAPI queues them into `LiveRequestQueue`.
 - **Downstream**: `Runner.run_live()` yields events (audio, text, transcriptions, tool calls). FastAPI forwards them as JSON over WebSocket.
-- **Tool execution**: ADK automatically handles `log_appliance` tool calls. The tool writes to `session.state["appliance_inventory"]`.
+- **Tool execution**: ADK automatically handles `log_appliance_bq` tool calls. The tool dual-writes to BigQuery (`appliances_v2.inventory`) and `session.state["appliance_inventory"]`.
 - **Response modality**: Auto-detected from model name — `native-audio` models use `AUDIO` response modality, others use `TEXT`.
 
 ## Key Files
@@ -22,7 +22,8 @@ Browser (camera + mic) → WebSocket → FastAPI → ADK Runner.run_live() → V
 |------|---------|
 | `app/main.py` | FastAPI server with WebSocket endpoint `/ws/{user_id}/{session_id}`. Uses `sys.path.insert` to add `app/` dir so `home_agent` imports as top-level package (matches bidi-demo pattern). |
 | `app/home_agent/agent.py` | ADK Agent definition — name: `home_appliance_detector`, model from `HOME_AGENT_MODEL` env var |
-| `app/home_agent/tools.py` | `log_appliance(appliance_type, make, model, location, finish, tool_context, notes="", user_id="default_user")` — writes to session state |
+| `app/home_agent/tools.py` | `log_appliance(...)` — session-state-only tool (kept for reference, not registered with agent) |
+| `app/home_agent/tools_bq.py` | `log_appliance_bq(...)` — primary tool: dual-write to BigQuery (`appliances_v2.inventory`) and session state |
 | `app/home_agent/__init__.py` | Package init — `from .agent import agent` |
 | `app/__init__.py` | Empty — makes `app` a Python package for test imports |
 | `app/static/index.html` | Web UI — 3-section flow (auth → app → session-end), video+controls left, chat right, live transcription overlay, debug panels |
@@ -33,8 +34,10 @@ Browser (camera + mic) → WebSocket → FastAPI → ADK Runner.run_live() → V
 | `app/static/css/style.css` | Split-pane layout, Material Design-inspired, dark console, responsive at 768px |
 | `tests/conftest.py` | Shared `app` fixture for test modules |
 | `tests/test_tools.py` | 5 unit tests for `log_appliance` tool behavior |
+| `tests/test_tools_bq.py` | 7 unit tests for `log_appliance_bq` — mocked BigQuery, dual-write, error handling |
 | `tests/test_agent.py` | 7 tests for agent configuration (name, model, tools, instruction content) |
 | `tests/test_main.py` | 6 tests — app init (3), WebSocket endpoint (1), message formats (2) |
+| `scripts/create_bq_table.sh` | One-time BigQuery dataset/table setup script |
 
 ## Build and Run Commands
 
@@ -42,7 +45,7 @@ Browser (camera + mic) → WebSocket → FastAPI → ADK Runner.run_live() → V
 # Install dependencies
 uv sync --all-extras
 
-# Run all tests (18 total)
+# Run all tests (25 total)
 uv run pytest tests/ -v
 
 # Run server
@@ -66,7 +69,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level info
 ## ADK Patterns Used
 
 - **Agent**: `google.adk.agents.Agent` with model, instruction, and tools
-- **Tool with ToolContext**: `log_appliance` uses `tool_context.state` to read/write session state. The `tool_context` param is auto-injected by ADK — not passed by the model.
+- **Tool with ToolContext**: `log_appliance_bq` uses `tool_context.state` to read/write session state and `google.cloud.bigquery.Client` for persistent storage. The `tool_context` param is auto-injected by ADK — not passed by the model.
 - **LiveRequestQueue**: Queues upstream messages via `send_realtime(blob)` for audio/images and `send_content(content)` for text. Closed with `.close()` in `finally` block.
 - **Runner.run_live()**: Async generator yielding `Event` objects. Events serialized via `model_dump_json(exclude_none=True, by_alias=True)`.
 - **RunConfig**: `StreamingMode.BIDI`, `AudioTranscriptionConfig()` for input/output, `SessionResumptionConfig(handle=...)` for reconnection, `ProactivityConfig(proactive_audio=True)` for unprompted agent observations.
@@ -85,15 +88,20 @@ Authentication: Uses Application Default Credentials (`gcloud auth application-d
 ## Testing Conventions
 
 - Framework: pytest with pytest-asyncio (`asyncio_mode = "auto"`)
-- 18 total tests across 3 files
+- 25 total tests across 4 files
 - Tool tests (`test_tools.py`): Use `unittest.mock.MagicMock` for `ToolContext` with `mock_context.state = {}` dict
+- BQ tool tests (`test_tools_bq.py`): 7 tests — mock BigQuery client, verify dual-write, error handling, timestamp
 - Agent tests (`test_agent.py`): Import agent, verify config properties (no mocking needed)
 - Server tests (`test_main.py`): Use `fastapi.testclient.TestClient`. WebSocket tests use unique session IDs to avoid `AlreadyExistsError` from `InMemorySessionService` singleton.
 - No Live API credentials required for tests — tests verify structure and message acceptance, not end-to-end API calls.
 
 ## Session State
 
-The agent stores appliance inventory in `session.state["appliance_inventory"]` as a list of dicts:
+The agent stores appliance inventory in two locations:
+1. **BigQuery** (persistent): `hybrid-vertex.appliances_v2.inventory` — primary storage with timestamp
+2. **Session state** (in-memory): `session.state["appliance_inventory"]` — used for in-session dedup checks
+
+Session state format:
 ```python
 [
     {
@@ -126,7 +134,8 @@ bidi-adk-live/
 │   ├── home_agent/
 │   │   ├── __init__.py          # from .agent import agent
 │   │   ├── agent.py             # ADK Agent definition
-│   │   └── tools.py             # log_appliance tool
+│   │   ├── tools.py             # log_appliance (session-state only, not registered)
+│   │   └── tools_bq.py          # log_appliance_bq (BigQuery + session state, active)
 │   └── static/
 │       ├── index.html
 │       ├── css/style.css
@@ -139,6 +148,7 @@ bidi-adk-live/
 │   ├── __init__.py
 │   ├── conftest.py
 │   ├── test_tools.py            # 5 tests
+│   ├── test_tools_bq.py         # 7 tests
 │   ├── test_agent.py            # 7 tests
 │   └── test_main.py             # 6 tests
 ├── docs/plans/
