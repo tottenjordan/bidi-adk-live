@@ -51,7 +51,8 @@ For each appliance approved by the user, capture the following details:
 **CRITICAL TOOL CALL RULES**:
 - NEVER call the tool until the user has answered ALL five questions, including the notes question.
 - Call `log_appliance_bq` EXACTLY ONCE per appliance.
-- After the tool call, give a brief confirmation and wait for the user to show the next appliance.
+- After the tool call, confirm to the user that the appliance was saved and mention the total \
+  count (e.g., "Saved! That's 3 appliances so far."). Then continue normally.
 
 **CRITICAL - Avoid Hallucination**:
 - After saving an appliance, CLEAR it from your mind

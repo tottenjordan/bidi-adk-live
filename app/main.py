@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import sys
-import time
 import warnings
 from pathlib import Path
 
@@ -151,19 +150,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str
         Audio data is sent as binary WebSocket frames for low-latency playback.
         All other event data (transcriptions, turn_complete, etc.) is sent as JSON text.
         """
-        # --- Post-tool duplicate suppression state ---
-        # The model sometimes speaks its tool-call confirmation twice in
-        # back-to-back turns. We let the first confirmation through and
-        # suppress the duplicate by tracking speech after the tool response:
-        #   function_response seen → saw_tool_response = True
-        #   model speaks (audio/transcription) → saw_post_tool_speech = True
-        #   turn_complete (with speech delivered) → arm cooldown
-        #   next speech within 5s → suppress until turn_complete
-        saw_tool_response = False
-        saw_post_tool_speech = False
-        post_tool_cooldown_until = 0.0
-        suppressing_turn = False
-
         try:
             async for event in runner.run_live(
                 session_id=session_id,
@@ -171,72 +157,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, session_id: str
                 live_request_queue=live_request_queue,
                 run_config=run_config,
             ):
-                # --- Track function_response events ---
-                if event.content and event.content.parts:
-                    for part in event.content.parts:
-                        if part.function_response:
-                            saw_tool_response = True
-                            saw_post_tool_speech = False
-
-                # --- Track speech after tool response ---
-                # Detect when the model actually speaks (audio or
-                # transcription) after a tool response, so we only arm
-                # the cooldown once the confirmation has been delivered.
-                if saw_tool_response and not saw_post_tool_speech:
-                    has_speech = (
-                        event.output_transcription
-                        or (
-                            event.content
-                            and event.content.parts
-                            and any(
-                                p.inline_data
-                                and p.inline_data.mime_type
-                                and p.inline_data.mime_type.startswith("audio/")
-                                for p in event.content.parts
-                            )
-                        )
-                    )
-                    if has_speech:
-                        saw_post_tool_speech = True
-
-                # --- Post-tool cooldown activation ---
-                # Only arm the cooldown after the model has both received
-                # the tool response AND spoken its confirmation. This
-                # prevents suppressing the confirmation itself.
-                if event.turn_complete and saw_tool_response and saw_post_tool_speech:
-                    post_tool_cooldown_until = time.monotonic() + 5.0
-                    saw_tool_response = False
-                    saw_post_tool_speech = False
-                    logger.debug("Post-tool cooldown armed for 5s")
-
-                # --- Suppress duplicate turn ---
-                # If we're in cooldown and the model starts speaking again
-                # (output audio or transcription), suppress the entire turn.
-                if not suppressing_turn and time.monotonic() < post_tool_cooldown_until:
-                    is_new_speech = (
-                        event.output_transcription
-                        or (
-                            event.content
-                            and event.content.parts
-                            and any(
-                                p.inline_data
-                                and p.inline_data.mime_type
-                                and p.inline_data.mime_type.startswith("audio/")
-                                for p in event.content.parts
-                            )
-                        )
-                    )
-                    if is_new_speech:
-                        suppressing_turn = True
-                        logger.info("SUPPRESSING duplicate post-tool turn")
-
-                if suppressing_turn:
-                    if event.turn_complete:
-                        suppressing_turn = False
-                        post_tool_cooldown_until = 0.0
-                        logger.info("Duplicate turn suppression ended (turn_complete)")
-                    continue
-
                 # Extract and send audio as binary frames
                 if event.content and event.content.parts:
                     non_audio_parts = []
