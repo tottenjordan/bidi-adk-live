@@ -35,7 +35,8 @@ Open http://localhost:8000 in your browser.
 2. Click **Mic** to enable voice interaction
 3. Walk through your home — the agent will identify appliances
 4. Confirm each appliance to add it to your inventory
-5. The agent will ask follow-up questions for make and model
+5. The agent will ask for brand, model number, finish, location, and notes
+6. After saving, the agent confirms and mentions the total count
 
 ## Testing
 
@@ -45,7 +46,7 @@ Open http://localhost:8000 in your browser.
 uv run pytest tests/ -v
 ```
 
-This runs 18 tests covering tool logic, agent configuration, and WebSocket message handling. No Vertex AI credentials are required for these tests.
+This runs 25 tests covering tool logic (session-state and BigQuery), agent configuration, and WebSocket message handling. No Vertex AI credentials are required for these tests.
 
 ### Manual Server Testing
 
@@ -62,7 +63,7 @@ This runs 18 tests covering tool logic, agent configuration, and WebSocket messa
 
 5. Click **Mic** — speak to the agent. The transcription panel should display your speech in real-time.
 
-6. Point the camera at a home appliance — the agent should describe what it sees and ask if you want to log it. Confirm to test the `log_appliance` tool call. The inventory counter above the controls should increment.
+6. Point the camera at a home appliance — the agent should describe what it sees and ask if you want to log it. Confirm to test the `log_appliance_bq` tool call. The agent will ask for brand, model number, finish, location, and notes before saving. The inventory counter above the controls should increment.
 
 7. Check the **Event Console** (bottom-right) for Live API events. Uncheck "Hide audio events" to see raw audio data events.
 

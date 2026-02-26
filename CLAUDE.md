@@ -12,7 +12,7 @@ Browser (camera + mic) → WebSocket → FastAPI → ADK Runner.run_live() → V
 ```
 
 - **Upstream**: Browser sends audio (binary PCM @ 16kHz), text (JSON), and images (JPEG base64 JSON @ 1 FPS) via WebSocket. FastAPI queues them into `LiveRequestQueue`.
-- **Downstream**: `Runner.run_live()` yields events (audio, text, transcriptions, tool calls). FastAPI forwards them as JSON over WebSocket.
+- **Downstream**: `Runner.run_live()` yields events (audio, text, transcriptions, tool calls). FastAPI extracts audio as binary WebSocket frames for low-latency playback and forwards all other event data as JSON text.
 - **Tool execution**: ADK automatically handles `log_appliance_bq` tool calls. The tool dual-writes to BigQuery (`appliances_v2.inventory`) and `session.state["appliance_inventory"]`.
 - **Response modality**: Auto-detected from model name — `native-audio` models use `AUDIO` response modality, others use `TEXT`.
 
@@ -20,8 +20,8 @@ Browser (camera + mic) → WebSocket → FastAPI → ADK Runner.run_live() → V
 
 | File | Purpose |
 |------|---------|
-| `app/main.py` | FastAPI server with WebSocket endpoint `/ws/{user_id}/{session_id}`. Uses `sys.path.insert` to add `app/` dir so `home_agent` imports as top-level package (matches bidi-demo pattern). |
-| `app/home_agent/agent.py` | ADK Agent definition — name: `home_appliance_detector`, model from `HOME_AGENT_MODEL` env var |
+| `app/main.py` | FastAPI server with WebSocket endpoint `/ws/{user_id}/{session_id}`. Uses `sys.path.insert` to add `app/` dir so `home_agent` imports as top-level package. Audio sent as binary WS frames; all other events as JSON text. |
+| `app/home_agent/agent.py` | ADK Agent definition — name: `home_appliance_detector`, model from `HOME_AGENT_MODEL` env var. Instruction includes 5-step detail-gathering flow, turn discipline, and tool call rules. |
 | `app/home_agent/tools.py` | `log_appliance(...)` — session-state-only tool (kept for reference, not registered with agent) |
 | `app/home_agent/tools_bq.py` | `log_appliance_bq(...)` — primary tool: dual-write to BigQuery (`appliances_v2.inventory`) and session state |
 | `app/home_agent/__init__.py` | Package init — `from .agent import agent` |
@@ -116,12 +116,22 @@ Session state format:
 ]
 ```
 
+## Agent Instruction Design
+
+The agent instruction in `agent.py` is sensitive to wording — especially with native-audio models. Key lessons learned:
+
+- **Avoid overly restrictive language**: Phrases like "STOP", "Wait silently", or "do NOT speak again" can cause the model to go completely silent. Use positive guidance ("Continue responding normally") instead.
+- **Keep confirmation rules inline**: Adding the post-tool confirmation as a separate numbered step caused the model to either skip it or repeat it. The working approach is a single inline rule with a concrete example (e.g., "Saved! That's 3 appliances so far.").
+- **Server-side suppression is fragile**: Attempts to suppress duplicate post-tool speech at the server level (cooldown timers, turn tracking) reliably ended up suppressing the real confirmation. The instruction alone handles duplicate prevention.
+- **Turn discipline must be permissive**: Rules about one-question-at-a-time work, but must always include "ALWAYS respond when the user speaks to you" to prevent the model from going silent.
+
 ## Known Behaviors
 
 - **Browser disconnect**: When a browser tab closes, the upstream task logs `Cannot call "receive" once a disconnect message has been received.` — this is expected, not a bug.
 - **Keepalive pings**: The Vertex AI Live API WebSocket sends keepalive pings every 20 seconds. These are handled automatically by the websockets library.
 - **Pydantic warnings**: Suppressed via `warnings.filterwarnings` — caused by `response_modalities` enum serialization.
 - **Session duration**: Vertex AI Live API has a 10-minute session limit (both audio-only and with video). Session resumption is configured but reconnection UI is not yet implemented.
+- **ADK camelCase serialization**: ADK serializes events with `by_alias=True`, producing camelCase field names (e.g., `turnComplete`, `inputTranscription`, `functionResponse`). The frontend handles both camelCase and snake_case variants.
 
 ## Project Structure
 
@@ -152,7 +162,9 @@ bidi-adk-live/
 │   ├── test_agent.py            # 7 tests
 │   └── test_main.py             # 6 tests
 ├── docs/plans/
-│   └── 2026-02-24-home-appliance-detector.md
+│   ├── 2026-02-24-home-appliance-detector.md
+│   ├── 2026-02-25-binary-audio-transport-ui-fixes.md
+│   └── 2026-02-25-bigquery-appliance-tool.md
 ├── pyproject.toml
 ├── .env.template
 ├── .gitignore
