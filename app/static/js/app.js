@@ -170,7 +170,7 @@ function handleServerEvent(data) {
 
   logConsole(event.author || "system", JSON.stringify(event, null, 2));
 
-  if (event.turn_complete) {
+  if (event.turnComplete || event.turn_complete) {
     finalizeAgentMessage();
   }
 
@@ -179,23 +179,27 @@ function handleServerEvent(data) {
     finalizeAgentMessage();
   }
 
-  if (event.input_transcription?.text) {
-    updateTranscription("user", event.input_transcription.text, event.input_transcription.finished);
+  // ADK serializes with by_alias=True → camelCase field names
+  const inputT = event.inputTranscription || event.input_transcription;
+  const outputT = event.outputTranscription || event.output_transcription;
+
+  if (inputT?.text) {
+    updateTranscription("user", inputT.text, inputT.finished);
     // Show finished user transcription in chat so user sees what the model heard
-    if (event.input_transcription.finished) {
-      addMessage("user", event.input_transcription.text);
+    if (inputT.finished) {
+      addMessage("user", inputT.text);
     }
   }
-  if (event.output_transcription?.text) {
-    const finished = event.output_transcription.finished;
+  if (outputT?.text) {
+    const finished = outputT.finished;
     if (finished) {
       // Finished transcription contains the full cumulative text — use it directly.
-      accumulatedOutputTranscription = event.output_transcription.text;
+      accumulatedOutputTranscription = outputT.text;
     } else {
       // Partial transcriptions are incremental chunks — accumulate them.
-      accumulatedOutputTranscription += event.output_transcription.text;
+      accumulatedOutputTranscription += outputT.text;
     }
-    updateTranscription("agent", event.output_transcription.text, finished);
+    updateTranscription("agent", outputT.text, finished);
     // Stream accumulated transcription into the chat as an agent message.
     // For native audio models, this is the only text representation of the response.
     updateAgentMessage(accumulatedOutputTranscription, !finished);
@@ -206,8 +210,10 @@ function handleServerEvent(data) {
 
   if (event.content?.parts) {
     for (const part of event.content.parts) {
-      if (part.function_response?.response?.total_appliances !== undefined) {
-        updateInventoryCount(part.function_response.response.total_appliances);
+      // ADK serializes with by_alias=True → camelCase
+      const funcResp = part.functionResponse || part.function_response;
+      if (funcResp?.response?.total_appliances !== undefined) {
+        updateInventoryCount(funcResp.response.total_appliances);
       }
     }
   }
